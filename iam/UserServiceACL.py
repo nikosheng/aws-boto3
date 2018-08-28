@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-"""List the IAM users with network or IAM sensitive policies in each AWS services"""
+"""List the IAM users with ec2, network or IAM sensitive policies in each AWS services"""
 
 __author__ = 'jiasfeng@amazon.com'
 
@@ -14,6 +14,29 @@ from datetime import date, datetime
 #
 #################################################
 iam = boto3.client('iam')
+restricted_managed_policies = ['AdministratorAccess',
+                               'AmazonVPCFullAccess',
+                               'IAMFullAccess',
+                               'AmazonEC2FullAccess']
+
+restricted_actions = ['*',
+                      "ec2:*",
+                      "ec2:*Vpc*",
+                      "ec2:*Subnet*",
+                      "ec2:*Gateway*",
+                      "ec2:*Vpn*",
+                      "ec2:*Route*",
+                      "ec2:*Address*",
+                      "ec2:*SecurityGroup*",
+                      "ec2:*NetworkAcl*",
+                      "iam:*",
+                      "iam:*Create*",
+                      "iam:*Delete*",
+                      "iam:*Put*",
+                      "iam:*Attach*",
+                      "iam:*Detach*",
+                      "iam:*Update*"]
+
 
 #################################################
 #
@@ -51,81 +74,85 @@ def list_all_users_with_prefix(prefix):
     return users
 
 
-#################################################
-#
-# Iterate the actions in the policies and search if any network or iam actions involved
-#
-#################################################
-def get_user_policy(userName, policyName):
-    res = iam.get_user_policy(
-        UserName=userName,
-        PolicyName=policyName
-    )
-    return res
-
-def get_group_policy(groupName, policyName):
-    res = iam.get_group_policy(
-        GroupName=groupName,
-        PolicyName=policyName
-    )
-    return res
-
-def verifyUserPolicy(userName, policies):
-    for policy in policies:
-        policy_document = get_user_policy(userName, policy['PolicyName'])
-        print(policy_document)
-
-def verifyGroupPolicy(groupName, policies):
-    for policy in policies:
-        policy_document = get_group_policy(groupName, policy['PolicyName'])
-        print(policy_document)
+def verify_inline_policy(policyDocument):
+    statements = policyDocument['Statement']
+    for statement in statements:
+        action = statement['Action']
+        effect = statement['Effect']
+        if action in restricted_actions and effect == 'Allow':
+            return True
+    return False
 
 
 def main():
     # variables
-    sensitive_users = []
+    sensitive_users = set()
 
     # list all the users
     users = json.loads(json.dumps(list_all_users(), cls=DateEncoder))
 
     # iterate the users to get the attached policies
     for user in users['Users']:
-        sensitive_user = {}
-        access_levels = []
         userName = user['UserName']
-        # list the group policies that the user belongs to
-        groups = iam.list_groups_for_user(
+
+        #################################################
+        #
+        # Managed User & Inline User Policies
+        #
+        #################################################
+        # list the user's inline policy
+        user_inline_policies = iam.list_user_policies(
             UserName=userName
         )
-        for group in groups['Groups']:
-            groupName = group['GroupName']
-
-            # list group's managed attache policies
-            group_attached_policies = iam.list_attached_group_policies(
-                GroupName=groupName
+        # get the details of the inline policies
+        for policyName in user_inline_policies['PolicyNames']:
+            user_policy = iam.get_user_policy(
+                UserName=userName,
+                PolicyName=policyName
             )
-            access_levels.append(verifyGroupPolicy(groupName, group_attached_policies['AttachedPolicies']))
-
-            # list group's inline policies
-            group_inline_policies = iam.list_group_policies(
-                GroupName=groupName
-            )
-            access_levels.append(verifyGroupPolicy(userName, group_inline_policies['PolicyNames']))
+            if verify_inline_policy(user_policy['PolicyDocument']):
+                sensitive_users.add(userName)
 
         # list the user's attached policy
         user_attached_policies = iam.list_attached_user_policies(
             UserName=userName
         )
-        verifyUserPolicy(userName, user_attached_policies['AttachedPolicies'])
+        for attached_policy in user_attached_policies['AttachedPolicies']:
+            # verify the policy is in restricted managed policies
+            if attached_policy['PolicyName'] in restricted_managed_policies:
+                sensitive_users.add(userName)
 
-        # list the user's inline policy
-        user_inline_policies = iam.list_user_policies(
+        #################################################
+        #
+        # Managed Group & Inline Group Policies
+        #
+        #################################################
+        groups = iam.list_groups_for_user(
             UserName=userName
         )
-        # user_inline_policies['PolicyNames']
-
-        # verify the policies
-
+        for group in groups['Groups']:
+            groupName = group['GroupName']
+            # list the group's inline policy
+            group_inline_policies = iam.list_group_policies(
+                GroupName=groupName
+            )
+            # get the details of the inline policies
+            for policyName in group_inline_policies['PolicyNames']:
+                user_policy = iam.get_user_policy(
+                    GroupName=groupName,
+                    PolicyName=policyName
+                )
+                if verify_inline_policy(user_policy['PolicyDocument']):
+                    sensitive_users.add(userName)
+            # list the group's attached policy
+            group_attached_policies = iam.list_attached_group_policies(
+                GroupName=groupName
+            )
+            for attached_policy in group_attached_policies['AttachedPolicies']:
+                # verify the policy is in restricted managed policies
+                if attached_policy['PolicyName'] in restricted_managed_policies:
+                    sensitive_users.add(userName)
+    print(sensitive_users)
 
 
 if __name__ == "__main__":
