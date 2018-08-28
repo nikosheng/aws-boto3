@@ -39,19 +39,26 @@ def main(argv):
             trails = cloudtrail.describe_trails()
             if not len(trails['trailList']):
                 # if no, create cloudtrail and bind to a S3 bucket
-                response = cloudtrail.create_trail(
-                    Name=arg_json['Name'],
-                    S3BucketName=arg_json['S3BucketName'],
-                    S3KeyPrefix=arg_json['S3KeyPrefix'],
-                    IsMultiRegionTrail=True
-                )
-                print(response)
-                cloudtrail.start_logging(
-                    Name=arg_json['Name']
-                )
+                try:
+                    trailDetail = cloudtrail.create_trail(
+                        Name=arg_json['Name'],
+                        S3BucketName=arg_json['S3BucketName'],
+                        S3KeyPrefix=arg_json['S3KeyPrefix'],
+                        IsMultiRegionTrail=True
+                    )
+                    response = {'Name': trailDetail['Name'],
+                                'S3BcketName': trailDetail['S3BucketName'],
+                                'S3KeyPrefix': trailDetail['S3KeyPrefix'],
+                                'TrailARN': trailDetail['TrailARN']}
+                    print(response)
+                    # Enable the logging
+                    cloudtrail.start_logging(
+                        Name=arg_json['Name']
+                    )
+                except Exception as err:
+                    print(err)
             else:
                 print(trails)
-            sys.exit()
         else:
             help()
             sys.exit()

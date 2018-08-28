@@ -101,7 +101,6 @@ import sys
 #
 #################################################
 
-
 # All Traffic / All TCP / All UDP / All ICMP
 standard_protocol_port_pair = [("tcp", 80), ("tcp", 443)]
 
@@ -129,7 +128,11 @@ class DateEncoder(json.JSONEncoder):
         else:
             return json.JSONEncoder.default(self, obj)
 
-
+#################################################
+#
+# Validate the security groups which are open-to-the-world
+#
+#################################################
 def validate_sg_open_to_world(permissions):
     for permission in permissions:
         for ipRange in permission['IpRanges']:
@@ -137,7 +140,11 @@ def validate_sg_open_to_world(permissions):
                 return True
     return False
 
-
+#################################################
+#
+# # Validate the security groups which are exposing the non-standard ports
+#
+#################################################
 def validate_sg_non_standard_port(permissions):
     for permission in permissions:
         # All traffic has been set in security group
@@ -151,7 +158,11 @@ def validate_sg_non_standard_port(permissions):
             return True
     return False
 
-
+#################################################
+#
+# # Validate the security groups which are setting the 0-65535 port range
+#
+#################################################
 def validate_sg_portrange(permissions):
     # variables
     fromPort = None
@@ -168,7 +179,11 @@ def validate_sg_portrange(permissions):
             return True
     return False
 
-
+#################################################
+#
+# # Validate the db security groups which are open-to-the-world
+#
+#################################################
 def validate_db_sg(ec2, rds):
     # variables
     response = []
@@ -190,7 +205,11 @@ def validate_db_sg(ec2, rds):
                         response.append(groupId)
     return response
 
-
+#################################################
+#
+# List the subnets which are attached with internet gateway
+#
+#################################################
 def list_subnets_with_igw(ec2):
     # variables
     gatewayIds = []
@@ -217,7 +236,11 @@ def list_subnets_with_igw(ec2):
                             subnets.append(association['SubnetId'])
     return subnets
 
-
+#################################################
+#
+# Validate the db security groups which contains the remote login ports
+#
+#################################################
 def validate_sg_remote_login(permissions):
     # variables
     fromPort = None
@@ -238,7 +261,11 @@ def validate_sg_remote_login(permissions):
                 return True
     return False
 
-
+#################################################
+#
+# List the ec2 instances which are in public subnet
+#
+#################################################
 def list_instances_in_public_subnets(ec2, subnets):
     # variables
     instances = []
@@ -259,7 +286,11 @@ def list_instances_in_public_subnets(ec2, subnets):
             instances.append(instance_body)
     return instances
 
-
+#################################################
+#
+# Validate the ec2 instances which contains the remote login operations
+#
+#################################################
 def validate_public_subnet_remote_ops(ec2):
     # variables
     response = {}
@@ -270,7 +301,11 @@ def validate_public_subnet_remote_ops(ec2):
     response['Instances'] = instances
     return response
 
-
+#################################################
+#
+# Helper message
+#
+#################################################
 def help():
     print('''
     SecurityGroupFilter.py [--region <Region>]
@@ -278,6 +313,7 @@ def help():
     -r --region  Specify a region code to perform cloudtrail scan, if not specified, the program will set as the 
                  default region in environment setting
     ''')
+
 
 def main(argv):
     try:
@@ -306,7 +342,8 @@ def main(argv):
     for sg in security_groups['SecurityGroups']:
         permissions = sg['IpPermissions']
         if validate_sg_non_standard_port(permissions) or \
-                validate_sg_open_to_world(permissions):
+                validate_sg_open_to_world(permissions) or \
+                validate_sg_remote_login(permissions):
             sensitive_sgs.append(sg['GroupId'])
     response['SensitiveSecurityGroups'] = sensitive_sgs
     response['DBSensitiveSecurityGroups'] = validate_db_sg(ec2=ec2, rds=rds)

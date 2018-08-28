@@ -1,6 +1,35 @@
 # -*- coding: utf-8 -*-
 
-"""List the IAM users with ec2, network or IAM sensitive policies in each AWS services"""
+"""
+List the IAM users with ec2, network or IAM sensitive policies in each AWS services
+
+Input:
+python UserServiceACL.py
+
+Output:
+[
+    {
+        "UserName": "admin",
+        "PolicyDocument": {
+            "PolicyName": "AdministratorAccess",
+            "PolicyArn": "arn:aws-cn:iam::aws:policy/AdministratorAccess"
+        }
+    },
+    {
+        "UserName": "nikofeng",
+        "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "*",
+                    "Resource": "*"
+                }
+            ]
+        }
+    }
+]
+"""
 
 __author__ = 'jiasfeng@amazon.com'
 
@@ -73,7 +102,11 @@ def list_all_users_with_prefix(prefix):
     )
     return users
 
-
+#################################################
+#
+# Verify the inline policies
+#
+#################################################
 def verify_inline_policy(policyDocument):
     statements = policyDocument['Statement']
     for statement in statements:
@@ -86,7 +119,7 @@ def verify_inline_policy(policyDocument):
 
 def main():
     # variables
-    sensitive_users = set()
+    response = []
 
     # list all the users
     users = json.loads(json.dumps(list_all_users(), cls=DateEncoder))
@@ -111,7 +144,8 @@ def main():
                 PolicyName=policyName
             )
             if verify_inline_policy(user_policy['PolicyDocument']):
-                sensitive_users.add(userName)
+                sensitive_users = {'UserName': userName, 'PolicyDocument': user_policy['PolicyDocument']}
+                response.append(sensitive_users)
 
         # list the user's attached policy
         user_attached_policies = iam.list_attached_user_policies(
@@ -120,7 +154,8 @@ def main():
         for attached_policy in user_attached_policies['AttachedPolicies']:
             # verify the policy is in restricted managed policies
             if attached_policy['PolicyName'] in restricted_managed_policies:
-                sensitive_users.add(userName)
+                sensitive_users = {'UserName': userName, 'PolicyDocument': attached_policy}
+                response.append(sensitive_users)
 
         #################################################
         #
@@ -143,7 +178,8 @@ def main():
                     PolicyName=policyName
                 )
                 if verify_inline_policy(user_policy['PolicyDocument']):
-                    sensitive_users.add(userName)
+                    sensitive_users = {'UserName': userName, 'PolicyDocument': user_policy['PolicyDocument']}
+                    response.append(sensitive_users)
             # list the group's attached policy
             group_attached_policies = iam.list_attached_group_policies(
                 GroupName=groupName
@@ -151,8 +187,9 @@ def main():
             for attached_policy in group_attached_policies['AttachedPolicies']:
                 # verify the policy is in restricted managed policies
                 if attached_policy['PolicyName'] in restricted_managed_policies:
-                    sensitive_users.add(userName)
-    print(sensitive_users)
+                    sensitive_users = {'UserName': userName, 'PolicyDocument': attached_policy}
+                    response.append(sensitive_users)
+    print(response)
 
 
 if __name__ == "__main__":
