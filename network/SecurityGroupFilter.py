@@ -238,31 +238,6 @@ def list_subnets_with_igw(ec2):
 
 #################################################
 #
-# Validate the db security groups which contains the remote login ports
-#
-#################################################
-def validate_sg_remote_login(permissions):
-    # variables
-    fromPort = None
-    toPort = None
-
-    for permission in permissions:
-        if "FromPort" in permission:
-            fromPort = permission["FromPort"]
-
-        if "ToPort" in permission:
-            toPort = permission["ToPort"]
-
-        if fromPort is None or toPort is None:
-            return True
-
-        for port in remote_login_ports:
-            if port in range(fromPort, toPort):
-                return True
-    return False
-
-#################################################
-#
 # List the ec2 instances which are in public subnet
 #
 #################################################
@@ -343,7 +318,7 @@ def main(argv):
         permissions = sg['IpPermissions']
         if validate_sg_non_standard_port(permissions) or \
                 validate_sg_open_to_world(permissions) or \
-                validate_sg_remote_login(permissions):
+                validate_sg_portrange(permissions):
             sensitive_sgs.append(sg['GroupId'])
     response['SensitiveSecurityGroups'] = sensitive_sgs
     response['DBSensitiveSecurityGroups'] = validate_db_sg(ec2=ec2, rds=rds)
