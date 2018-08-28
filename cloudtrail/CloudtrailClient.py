@@ -12,7 +12,7 @@ import json
 
 def help():
     print('''
-    CloudtrailClient.py [-h --help] [-b <build> {'Region':<Region>, 'Name':<cloudtrail name>, 'S3BucketName':<S3BucketName>, 'S3KeyPrefix':<S3KeyPrefix>]
+    CloudtrailClient.py [-h --help] [-b <build> "{\"Region\":\"<Region>\", \"Name\":\"<cloudtrail name>\", \"S3BucketName\":\"<S3BucketName>\", \"S3KeyPrefix\":\"<S3KeyPrefix>\"]
 
     -r --region  Specify a region code to perform cloudtrail scan, if not specified, the program will set as the 
                  default region in environment setting
@@ -33,7 +33,7 @@ def main(argv):
             help()
             sys.exit()
         elif opt in ("-b", "--build"):
-            arg_json = json.loads(json.dumps(arg))
+            arg_json = json.loads(arg)
             cloudtrail = boto3.client('cloudtrail', region_name=arg_json['Region'])
             # Verify cloudtrail is activated in account
             trails = cloudtrail.describe_trails()
@@ -42,9 +42,13 @@ def main(argv):
                 response = cloudtrail.create_trail(
                     Name=arg_json['Name'],
                     S3BucketName=arg_json['S3BucketName'],
-                    S3KeyPrefix=arg_json['S3KeyPrefix']
+                    S3KeyPrefix=arg_json['S3KeyPrefix'],
+                    IsMultiRegionTrail=True
                 )
                 print(response)
+                cloudtrail.start_logging(
+                    Name=arg_json['Name']
+                )
             else:
                 print(trails)
             sys.exit()
