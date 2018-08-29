@@ -149,7 +149,8 @@ def validate_sg_open_to_world(securityGroups):
         for permission in permissions:
             for ipRange in permission['IpRanges']:
                 if ipRange['CidrIp'] == '0.0.0.0/0':
-                    response.append(securityGroup['GroupId'])
+                    group = {'GroupId': securityGroup['GroupId'], 'IpPermission': [permission]}
+                    response.append(group)
     return response
 
 #################################################
@@ -185,7 +186,8 @@ def validate_sg_non_standard_port(securityGroups):
                 port = permission["FromPort"]
 
             if (protocol, port) not in standard_protocol_port_pair:
-                response.append(securityGroup['GroupId'])
+                group = {'GroupId': securityGroup['GroupId'],'IpPermission': [permission]}
+                response.append(group)
     return response
 
 #################################################
@@ -209,7 +211,7 @@ def validate_sg_non_standard_port(securityGroups):
 #             return True
 #     return False
 
-def validate_sg_portrange(securityGroups):
+def validate_sg_invalid_portrange(securityGroups):
     # variables
     response = []
     fromPort = None
@@ -225,7 +227,8 @@ def validate_sg_portrange(securityGroups):
                 toPort = permission["ToPort"]
 
             if (fromPort, toPort) in port_range:
-                response.append(securityGroup['GroupId'])
+                group = {'GroupId': securityGroup['GroupId'],'IpPermission': [permission]}
+                response.append(group)
     return response
 
 #################################################
@@ -233,7 +236,7 @@ def validate_sg_portrange(securityGroups):
 # # Validate the db security groups which are open-to-the-world
 #
 #################################################
-def validate_db_sg(ec2, rds):
+def validate_sg_db_invalid(ec2, rds):
     # variables
     response = []
 
@@ -335,10 +338,41 @@ def help():
                  default region in environment setting
     ''')
 
+#################################################
+#
+# Delete security group rules which are invalid
+#
+#################################################
+def delete_invalid_sg(ec2, securityGroups, msg=None):
+    # variables
+    response = {}
 
+    try:
+        for securityGroup in securityGroups:
+            ec2.revoke_security_group_ingress(
+                GroupId=securityGroup['GroupId'],
+                IpPermissions=securityGroup['IpPermission']
+            )
+    except Exception as err:
+        response['ResponseStatus'] = 'Failed'
+        response['ResponseMessage'] = err
+        return response
+
+    response['ResponseStatus'] = 'Success'
+    response['ResponseMessage'] = msg
+    return response
+
+#################################################
+#
+# Main Entry
+#
+#################################################
 def main(argv):
     try:
-        opts, args = getopt.getopt(argv, "hr:", ["help", "region="])
+        opts, args = getopt.getopt(argv, "hr:d:",
+                                   ["help",
+                                    "region=",
+                                    "delete="])
     except getopt.GetoptError:
         help()
         sys.exit(2)
@@ -346,9 +380,16 @@ def main(argv):
     # init
     ec2 = boto3.client('ec2')
     rds = boto3.client('rds')
+    sts = boto3.client('sts')
 
     # variables
     response = {}
+    # filter result
+    stats = {}
+    # remove rules result
+    delStats = []
+    # delete options
+    delOpts = {}
 
     for opt, arg in opts:
         if opt in ("-h", "--help"):
@@ -357,14 +398,32 @@ def main(argv):
         if opt in ("-r", "--region"):
             ec2 = boto3.client('ec2', region_name=arg)
             rds = boto3.client('rds', region_name=arg)
+            sts = boto3.client('sts', region_name=arg)
+        if opt in ("-d", "--delete"):
+            delOpts = json.loads(arg)
 
     # list all security groups
     security_groups = ec2.describe_security_groups()
-    response['SourceDescOpenToTheWorld'] = validate_sg_open_to_world(security_groups['SecurityGroups'])
-    response['NonStandardPort'] = validate_sg_non_standard_port(security_groups['SecurityGroups'])
-    response['InvalidPortRange'] = validate_sg_portrange(security_groups['SecurityGroups'])
-    response['DBSensitiveSecurityGroups'] = validate_db_sg(ec2=ec2, rds=rds)
-    response['PubInstancesWithRemoteOps'] = validate_public_subnet_remote_ops(ec2)
+    stats['AccountId'] = sts.get_caller_identity()['Account']
+    stats['SourceDescOpenToTheWorld'] = validate_sg_open_to_world(security_groups['SecurityGroups'])
+    stats['NonStandardPort'] = validate_sg_non_standard_port(security_groups['SecurityGroups'])
+    stats['InvalidPortRange'] = validate_sg_invalid_portrange(security_groups['SecurityGroups'])
+    stats['DBSensitiveSecurityGroups'] = validate_sg_db_invalid(ec2=ec2, rds=rds)
+    stats['PubInstancesWithRemoteOps'] = validate_public_subnet_remote_ops(ec2)
+    response['Stats'] = stats
+
+    # delete the invalid security group rules if specified delete option
+    if delOpts:
+        if delOpts['invalid-src-dest'] == 'yes':
+            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['SourceDescOpenToTheWorld'], msg='SourceDescOpenToTheWorld'))
+        if delOpts['invalid-standard-port'] == 'yes':
+            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['NonStandardPort'], msg='NonStandardPort'))
+        if delOpts['invalid-port-range'] == 'yes':
+            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['InvalidPortRange'], msg='InvalidPortRange'))
+        if delOpts['invalid_db_sg'] == 'yes':
+            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['DBSensitiveSecurityGroups'], msg='DBSensitiveSecurityGroups'))
+        response['DelStats'] = delStats
+
     print(response)
 
 
