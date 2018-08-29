@@ -133,51 +133,100 @@ class DateEncoder(json.JSONEncoder):
 # Validate the security groups which are open-to-the-world
 #
 #################################################
-def validate_sg_open_to_world(permissions):
-    for permission in permissions:
-        for ipRange in permission['IpRanges']:
-            if ipRange['CidrIp'] == '0.0.0.0/0':
-                return True
-    return False
+# def validate_sg_open_to_world(permissions):
+#     for permission in permissions:
+#         for ipRange in permission['IpRanges']:
+#             if ipRange['CidrIp'] == '0.0.0.0/0':
+#                 return True
+#     return False
+
+def validate_sg_open_to_world(securityGroups):
+    # variables
+    response = []
+
+    for securityGroup in securityGroups:
+        permissions = securityGroup['IpPermissions']
+        for permission in permissions:
+            for ipRange in permission['IpRanges']:
+                if ipRange['CidrIp'] == '0.0.0.0/0':
+                    response.append(securityGroup['GroupId'])
+    return response
 
 #################################################
 #
 # # Validate the security groups which are exposing the non-standard ports
 #
 #################################################
-def validate_sg_non_standard_port(permissions):
-    for permission in permissions:
-        # All traffic has been set in security group
-        protocol = permission["IpProtocol"]
-        if "FromPort" not in permission:
-            port = None
-        else:
-            port = permission["FromPort"]
+# def validate_sg_non_standard_port(permissions):
+#     for permission in permissions:
+#         # All traffic has been set in security group
+#         protocol = permission["IpProtocol"]
+#         if "FromPort" not in permission:
+#             port = None
+#         else:
+#             port = permission["FromPort"]
+#
+#         if (protocol, port) not in standard_protocol_port_pair:
+#             return True
+#     return False
 
-        if (protocol, port) not in standard_protocol_port_pair:
-            return True
-    return False
+def validate_sg_non_standard_port(securityGroups):
+    # variables
+    response = []
+
+    for securityGroup in securityGroups:
+        permissions = securityGroup['IpPermissions']
+        for permission in permissions:
+            # All traffic has been set in security group
+            protocol = permission["IpProtocol"]
+            if "FromPort" not in permission:
+                port = None
+            else:
+                port = permission["FromPort"]
+
+            if (protocol, port) not in standard_protocol_port_pair:
+                response.append(securityGroup['GroupId'])
+    return response
 
 #################################################
 #
 # # Validate the security groups which are setting the 0-65535 port range
 #
 #################################################
-def validate_sg_portrange(permissions):
+# def validate_sg_portrange(permissions):
+#     # variables
+#     fromPort = None
+#     toPort = None
+#
+#     for permission in permissions:
+#         if "FromPort" in permission:
+#             fromPort = permission["FromPort"]
+#
+#         if "ToPort" in permission:
+#             toPort = permission["ToPort"]
+#
+#         if (fromPort, toPort) in port_range:
+#             return True
+#     return False
+
+def validate_sg_portrange(securityGroups):
     # variables
+    response = []
     fromPort = None
     toPort = None
 
-    for permission in permissions:
-        if "FromPort" in permission:
-            fromPort = permission["FromPort"]
+    for securityGroup in securityGroups:
+        permissions = securityGroup['IpPermissions']
+        for permission in permissions:
+            if "FromPort" in permission:
+                fromPort = permission["FromPort"]
 
-        if "ToPort" in permission:
-            toPort = permission["ToPort"]
+            if "ToPort" in permission:
+                toPort = permission["ToPort"]
 
-        if (fromPort, toPort) in port_range:
-            return True
-    return False
+            if (fromPort, toPort) in port_range:
+                response.append(securityGroup['GroupId'])
+    return response
 
 #################################################
 #
@@ -199,10 +248,7 @@ def validate_db_sg(ec2, rds):
                         groupId
                     ]
                 )
-                for sgDetail in sgDetails['SecurityGroups']:
-                    permissions = sgDetail['IpPermissions']
-                    if validate_sg_open_to_world(permissions):
-                        response.append(groupId)
+                response += validate_sg_open_to_world(sgDetails['SecurityGroups'])
     return response
 
 #################################################
@@ -297,6 +343,13 @@ def main(argv):
         help()
         sys.exit(2)
 
+    # init
+    ec2 = boto3.client('ec2')
+    rds = boto3.client('rds')
+
+    # variables
+    response = {}
+
     for opt, arg in opts:
         if opt in ("-h", "--help"):
             help()
@@ -304,23 +357,12 @@ def main(argv):
         if opt in ("-r", "--region"):
             ec2 = boto3.client('ec2', region_name=arg)
             rds = boto3.client('rds', region_name=arg)
-        else:
-            ec2 = boto3.client('ec2')
-            rds = boto3.client('rds')
-
-    # variables
-    response = {}
-    sensitive_sgs = []
 
     # list all security groups
     security_groups = ec2.describe_security_groups()
-    for sg in security_groups['SecurityGroups']:
-        permissions = sg['IpPermissions']
-        if validate_sg_non_standard_port(permissions) or \
-                validate_sg_open_to_world(permissions) or \
-                validate_sg_portrange(permissions):
-            sensitive_sgs.append(sg['GroupId'])
-    response['SensitiveSecurityGroups'] = sensitive_sgs
+    response['SourceDescOpenToTheWorld'] = validate_sg_open_to_world(security_groups['SecurityGroups'])
+    response['NonStandardPort'] = validate_sg_non_standard_port(security_groups['SecurityGroups'])
+    response['InvalidPortRange'] = validate_sg_portrange(security_groups['SecurityGroups'])
     response['DBSensitiveSecurityGroups'] = validate_db_sg(ec2=ec2, rds=rds)
     response['PubInstancesWithRemoteOps'] = validate_public_subnet_remote_ops(ec2)
     print(response)
