@@ -9,80 +9,109 @@
 5. for the public subnet with remote operation port (22/3389/111)
 
 Input:
-python SecurityGroupFilter.py [--region <Region>]
+python SecurityGroupFilter.py [--region <Region>] [--delete {\"invalid-src-dest\":\"no\",\"invalid-standard-port\":\"no\",\"invalid-port-range\":\"no\",\"invalid_db_sg\":\"yes\"}]
 
 
 Output:
 {
-    "SensitiveSecurityGroups": [
-        "sg-0439d07ed8c4c09f7",
-        "sg-0cd6ae65",
-        "sg-0f621749f47a5a9a2",
-        "sg-22c6be4b",
-        "sg-403e1629",
-        "sg-54d7af3d",
-        "sg-5bb7b732",
-        "sg-5c271f35",
-        "sg-5f4c4f36",
-        "sg-74ea911d",
-        "sg-7ed48217",
-        "sg-8ad6aee3",
-        "sg-b3ceb6da",
-        "sg-d36e4cba",
-        "sg-f86f4d91"
-    ],
-    "DBSensitiveSecurityGroups": [
-        "sg-54d7af3d"
-    ],
-    "PubInstancesWithRemoteOps": {
-        "Instances": [
+    "Stats": {
+        "AccountId": "286792376082",
+        "PubInstancesWithRemoteOps": {
+            "Instances": [
+                {
+                    "InstanceId": "i-043a4d2ecb073cf4a",
+                    "SecurityGroups": [
+                        {
+                            "GroupId": "sg-0cd6ae65",
+                            "GroupName": "default"
+                        }
+                    ]
+                }
+            ]
+        },
+        "InvalidPortRange": [
             {
-                "InstanceId": "i-043a4d2ecb073cf4a",
-                "SecurityGroups": [
+                "GroupId": "sg-0439d07ed8c4c09f7",
+                "IpPermission": [
                     {
-                        "GroupName": "default",
-                        "GroupId": "sg-0cd6ae65"
+                        "Ipv6Ranges": [ ],
+                        "IpRanges": [ ],
+                        "UserIdGroupPairs": [
+                            {
+                                "GroupId": "sg-5f4c4f36",
+                                "UserId": "286792376082"
+                            }
+                        ],
+                        "PrefixListIds": [ ],
+                        "IpProtocol": "-1"
                     }
                 ]
-            },
+            }
+        ],
+        "NonStandardPort": [
             {
-                "InstanceId": "i-06cf5a4a7f9636b78",
-                "SecurityGroups": [
+                "GroupId": "sg-0439d07ed8c4c09f7",
+                "IpPermission": [
                     {
-                        "GroupName": "default",
-                        "GroupId": "sg-0cd6ae65"
+                        "Ipv6Ranges": [ ],
+                        "IpRanges": [ ],
+                        "UserIdGroupPairs": [
+                            {
+                                "GroupId": "sg-5f4c4f36",
+                                "UserId": "286792376082"
+                            }
+                        ],
+                        "PrefixListIds": [ ],
+                        "IpProtocol": "-1"
                     }
                 ]
-            },
+            }
+        ],
+        "SourceDescOpenToTheWorld": [
             {
-                "InstanceId": "i-03ca9b57287d7fa78",
-                "SecurityGroups": [
+                "GroupId": "sg-0cd6ae65",
+                "IpPermission": [
                     {
-                        "GroupName": "allow-all-traffic",
-                        "GroupId": "sg-5f4c4f36"
+                        "Ipv6Ranges": [ ],
+                        "IpRanges": [
+                            {
+                                "CidrIp": "0.0.0.0/0"
+                            }
+                        ],
+                        "UserIdGroupPairs": [ ],
+                        "PrefixListIds": [ ],
+                        "IpProtocol": "-1"
                     }
                 ]
-            },
+            }
+        ],
+        "DBSensitiveSecurityGroups": [
             {
-                "InstanceId": "i-089205aa25678afb0",
-                "SecurityGroups": [
+                "GroupId": "sg-54d7af3d",
+                "IpPermission": [
                     {
-                        "GroupName": "allow-all-traffic",
-                        "GroupId": "sg-5f4c4f36"
-                    }
-                ]
-            },
-            {
-                "InstanceId": "i-07d96cbb3db15838c",
-                "SecurityGroups": [
-                    {
-                        "GroupName": "default",
-                        "GroupId": "sg-0cd6ae65"
+                        "PrefixListIds": [ ],
+                        "IpRanges": [
+                            {
+                                "CidrIp": "0.0.0.0/0"
+                            }
+                        ],
+                        "UserIdGroupPairs": [ ],
+                        "ToPort": 22,
+                        "Ipv6Ranges": [ ],
+                        "FromPort": 22,
+                        "IpProtocol": "tcp"
                     }
                 ]
             }
         ]
-    }
+    },
+    "DelStats": [
+        {
+            "ResponseStatus": "Success",
+            "ResponseMessage": "DBSensitiveSecurityGroups"
+        }
+    ]
 }
 
 """
@@ -332,10 +361,12 @@ def validate_public_subnet_remote_ops(ec2):
 #################################################
 def help():
     print('''
-    SecurityGroupFilter.py [--region <Region>]
+    SecurityGroupFilter.py [--region <Region>] [--delete {\"invalid-src-dest\":\"no\",\"invalid-standard-port\":\"no\",\"invalid-port-range\":\"no\",\"invalid_db_sg\":\"yes\"}]
 
     -r --region  Specify a region code to perform cloudtrail scan, if not specified, the program will set as the 
                  default region in environment setting
+                 
+    -d --delete  Specify a json body including the delete options for various conditions
     ''')
 
 #################################################
