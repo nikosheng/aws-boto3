@@ -18,6 +18,7 @@ import sys
 SSMManagedPolicyArns = ['arn:aws-cn:iam::aws:policy/service-role/AmazonEC2RoleforSSM']
 AssumeRolePolicyDocument = '{\"Version\": \"2012-10-17\",\"Statement\": {\"Effect\": \"Allow\",\"Principal\": {\"Service\": \"ec2.amazonaws.com.cn\"},\"Action\": \"sts:AssumeRole\"}}'
 
+
 #################################################
 #
 # Transform the Datetime format
@@ -31,6 +32,7 @@ class DateEncoder(json.JSONEncoder):
             return obj.strftime('%Y-%m-%d')
         else:
             return json.JSONEncoder.default(self, obj)
+
 
 #################################################
 #
@@ -55,6 +57,7 @@ def createRole(iam, roleName, policyArns, desc=None):
 
     return role
 
+
 #################################################
 #
 # Create Instance Profile
@@ -76,6 +79,7 @@ def createInstanceProfile(iam, profileName, roleName):
         sys.exit(2)
 
     return instanceProfile
+
 
 #################################################
 #
@@ -101,10 +105,29 @@ def getSSMPermissionRoleForEC2Existed(iam):
                           policyArns=SSMManagedPolicyArns,
                           desc='System Manager Permission Role for EC2')
         instanceProfile = createInstanceProfile(iam=iam,
-                                                 profileName='SSMPermissionRoleForEC2Profile',
-                                                 roleName=role['RoleName'])
+                                                profileName='SSMPermissionRoleForEC2Profile',
+                                                roleName=role['RoleName'])
     return role, instanceProfile
 
+#################################################
+#
+# Get the role from instance profile
+#
+#################################################
+def getRoleFromInstanceProfile(iam, instanceProfile):
+    # variables
+    roleNames = []
+
+    instanceProfileArn = instanceProfile['Arn']
+    instanceProfileName = instanceProfileArn[instanceProfileArn.rfind("/") + 1:]
+    response = iam.get_instance_profile(
+        InstanceProfileName=instanceProfileName
+    )
+    roles = response['InstanceProfile']['Roles']
+    for role in roles:
+        roleNames.append(role['RoleName'])
+
+    return roleNames
 
 #################################################
 #
@@ -118,6 +141,7 @@ def help():
     -r --region  Specify a region code to perform cloudtrail scan, if not specified, the program will set as the 
                  default region in environment setting
     ''')
+
 
 #################################################
 #
@@ -151,22 +175,23 @@ def main(argv):
     instance_response_str = json.dumps(instance_response, cls=DateEncoder)
     instance_response_js = json.loads(instance_response_str)
 
-    instance_group = instance_response_js['Reservations']
-    for instance in instance_group:
+    instances = []
+    for reservation in instance_response_js['Reservations']:
+        instances += reservation['Instances']
+
+    for instance in instances:
         # If the instance is terminated, then skip the validation
-        if instance['Instances'][0]['State']['Name'] == 'terminated':
+        if instance['State']['Name'] == 'terminated':
             continue
-        instance_id = instance['Instances'][0]['InstanceId']
-        if 'IamInstanceProfile' in instance['Instances'][0]:
+        instance_id = instance['InstanceId']
+        if 'IamInstanceProfile' in instance:
             # Matched Flag
             flag = False
             # If yes, then search the role of the policies to check whether the SSM policy is included
-            # sample: arn:aws-cn:iam::<Account>:instance-profile/ecsInstanceRole
-            instance_role_arn = instance['Instances'][0]['IamInstanceProfile']['Arn']
-            instance_role = instance_role_arn[instance_role_arn.rfind('/') + 1:]
+            instanceRoleNames = getRoleFromInstanceProfile(iam, instance['IamInstanceProfile'])
             # Get the attached managed policies
             attach_policies_entity = iam.list_attached_role_policies(
-                RoleName=instance_role
+                RoleName=instanceRoleNames[0]
             )
             attach_policies = attach_policies_entity['AttachedPolicies']
             for policy in attach_policies:
@@ -177,7 +202,7 @@ def main(argv):
                 print('UnMatched Instance: ' + instance_id)
                 # Attach the <AmazonEC2RoleforSSM> policy to the EC2 instance
                 res = iam.attach_role_policy(
-                    RoleName=instance_role,
+                    RoleName=instanceRoleNames[0],
                     PolicyArn=SSMManagedPolicyArns[0]
                 )
                 print("Attached Successfully ==> Instance: " + instance_id)

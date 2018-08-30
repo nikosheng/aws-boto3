@@ -6,7 +6,7 @@ Setup the Password Policy with following conditions:
 3. Specifies whether IAM user passwords must contain at least one numeric character (0 to 9).
 4. Specifies whether IAM user passwords must contain at least one uppercase character from the ISO basic Latin alphabet (A to Z).
 5. Specifies whether IAM user passwords must contain at least one lowercase character from the ISO basic Latin alphabet (a to z).
-6. The number of days that an IAM user password is valid for 90 days
+6. The password never expires
 7. Specifies the number of previous passwords(3) that IAM users are prevented from reusing
 8. Prevents IAM users from setting a new password after their password has expired. The IAM user cannot be accessed until an administrator resets the password.
 
@@ -35,7 +35,7 @@ def main():
         RequireNumbers=True,
         RequireUppercaseCharacters=True,
         RequireLowercaseCharacters=True,
-        MaxPasswordAge=90,
+        MaxPasswordAge=0,
         PasswordReusePrevention=3,
         HardExpiry=True
     )
