@@ -7,6 +7,16 @@ __author__ = 'jiasfeng@amazon.com'
 import boto3
 import json
 from datetime import date, datetime
+import getopt
+import sys
+
+#################################################
+#
+# Global variables
+#
+#################################################
+SSMManagedPolicyArns = ['arn:aws-cn:iam::aws:policy/service-role/AmazonEC2RoleforSSM']
+AssumeRolePolicyDocument = '{\"Version\": \"2012-10-17\",\"Statement\": {\"Effect\": \"Allow\",\"Principal\": {\"Service\": \"ec2.amazonaws.com.cn\"},\"Action\": \"sts:AssumeRole\"}}'
 
 #################################################
 #
@@ -24,13 +34,117 @@ class DateEncoder(json.JSONEncoder):
 
 #################################################
 #
+# Create SSM Role
+#
+#################################################
+def createRole(iam, roleName, policyArns, desc=None):
+    # Create a new Role
+    roleResponse = iam.create_role(
+        RoleName=roleName,
+        AssumeRolePolicyDocument=AssumeRolePolicyDocument,
+        Description=desc
+    )
+    role = roleResponse['Role']
+
+    # Attach the SSM policies to the role
+    for policyArn in policyArns:
+        response = iam.attach_role_policy(
+            RoleName=role['RoleName'],
+            PolicyArn=policyArn
+        )
+
+    return role
+
+#################################################
+#
+# Create Instance Profile
+#
+#################################################
+def createInstanceProfile(iam, profileName, roleName):
+    try:
+        response = iam.create_instance_profile(
+            InstanceProfileName=profileName
+        )
+        instanceProfile = response['InstanceProfile']
+
+        iam.add_role_to_instance_profile(
+            InstanceProfileName=instanceProfile['InstanceProfileName'],
+            RoleName=roleName
+        )
+    except Exception as err:
+        print(err)
+        sys.exit(2)
+
+    return instanceProfile
+
+#################################################
+#
+# Get the role <SSMPermissionRoleForEC2>
+#
+#################################################
+def getSSMPermissionRoleForEC2Existed(iam):
+    # Check whether SSMPermissionRoleForEC2 and SSMPermissionRoleForEC2Profile are existed
+    try:
+        # Role
+        roleRes = iam.get_role(
+            RoleName='SSMPermissionRoleForEC2'
+        )
+        role = roleRes['Role']
+        # Instance Profile
+        profileRes = iam.get_instance_profile(
+            InstanceProfileName='SSMPermissionRoleForEC2Profile'
+        )
+        instanceProfile = profileRes['InstanceProfile']
+    except Exception as err:
+        # Create a new SSM Role
+        role = createRole(iam=iam, roleName='SSMPermissionRoleForEC2',
+                          policyArns=SSMManagedPolicyArns,
+                          desc='System Manager Permission Role for EC2')
+        instanceProfile = createInstanceProfile(iam=iam,
+                                                 profileName='SSMPermissionRoleForEC2Profile',
+                                                 roleName=role['RoleName'])
+    return role, instanceProfile
+
+
+#################################################
+#
+# Helper message
+#
+#################################################
+def help():
+    print('''
+    SSMClient.py [--region <Region>]
+
+    -r --region  Specify a region code to perform cloudtrail scan, if not specified, the program will set as the 
+                 default region in environment setting
+    ''')
+
+#################################################
+#
 # Attach SSM Role Main Logic
 #
 #################################################
-def main():
-    ssm = boto3.client('ssm')
+def main(argv):
+    try:
+        opts, args = getopt.getopt(argv, "hr:", ["help", "region="])
+    except getopt.GetoptError:
+        help()
+        sys.exit(2)
+
+    # init
     ec2 = boto3.client('ec2')
     iam = boto3.client('iam')
+
+    for opt, arg in opts:
+        if opt in ("-h", "--help"):
+            help()
+            sys.exit()
+        if opt in ("-r", "--region"):
+            ec2 = boto3.client('ec2', region_name=arg)
+            iam = boto3.client('iam', region_name=arg)
+
+    # Check whether the SSMPermissionRoleForEC2 is existed
+    role, instanceProfile = getSSMPermissionRoleForEC2Existed(iam=iam)
 
     # Scan each EC2 instance to search the attached role
     instance_response = ec2.describe_instances()
@@ -64,21 +178,22 @@ def main():
                 # Attach the <AmazonEC2RoleforSSM> policy to the EC2 instance
                 res = iam.attach_role_policy(
                     RoleName=instance_role,
-                    PolicyArn='arn:aws-cn:iam::aws:policy/service-role/AmazonEC2RoleforSSM'
+                    PolicyArn=SSMManagedPolicyArns[0]
                 )
                 print("Attached Successfully ==> Instance: " + instance_id)
         else:
             print('Without SSM Role ==> Instance: ' + instance_id)
-            # Attach the <AmazonEC2RoleforSSM> policy to the EC2 instance
+
+            # Attach the role <SSMPermissionRoleForEC2> to the EC2 instance
             res = ec2.associate_iam_instance_profile(
                 IamInstanceProfile={
-                    'Arn': 'arn:aws-cn:iam::286792376082:instance-profile/SSMFullPermissionRole',
-                    'Name': 'SSMFullPermissionRole'
+                    'Arn': instanceProfile['Arn'],
+                    'Name': instanceProfile['InstanceProfileName']
                 },
-                InstanceId=instance['Instances'][0]['InstanceId']
+                InstanceId=instance_id
             )
             print("Attached Successfully ==> Instance: " + instance_id)
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
