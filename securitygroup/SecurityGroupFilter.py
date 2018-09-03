@@ -9,7 +9,7 @@
 5. for the public subnet with remote operation port (22/3389/111)
 
 Input:
-python SecurityGroupFilter.py [--region <Region>] [--delete {\"invalid-src-dest\":\"no\",\"invalid-standard-port\":\"no\",\"invalid-port-range\":\"no\",\"invalid_db_sg\":\"yes\"}]
+python SecurityGroupFilter.py [-r --region <Region>] [-u --update {\"bastion-cidr\":\"10.10.10.10/32\",\"invalid-src-dest\":\"no\",\"invalid-standard-port\":\"no\",\"invalid-port-range\":\"no\",\"invalid_db_sg\":\"yes\"}]
 
 
 Output:
@@ -106,7 +106,7 @@ Output:
             }
         ]
     },
-    "DelStats": [
+    "updateStats": [
         {
             "ResponseStatus": "Success",
             "ResponseMessage": "DBSensitiveSecurityGroups"
@@ -123,12 +123,20 @@ import json
 from datetime import date, datetime
 import getopt
 import sys
+import logging
+import time
+import re
 
 #################################################
 #
 # Global variables
 #
 #################################################
+logging.basicConfig(level=logging.DEBUG,
+                    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+                    datefmt='%Y-%m-%d  %H:%M:%S %a',
+                    filename='SecurityGroupFilter.log.%d' % int(round(time.time() * 1000))
+                    )
 
 # All Traffic / All TCP / All UDP / All ICMP
 standard_protocol_port_pair = [("tcp", 80), ("tcp", 443)]
@@ -157,6 +165,7 @@ class DateEncoder(json.JSONEncoder):
         else:
             return json.JSONEncoder.default(self, obj)
 
+
 #################################################
 #
 # Validate the security groups which are open-to-the-world
@@ -169,7 +178,7 @@ class DateEncoder(json.JSONEncoder):
 #                 return True
 #     return False
 
-def validate_sg_open_to_world(securityGroups):
+def validate_sg_open_to_world(ec2, securityGroups, **kwargs):
     # variables
     response = []
 
@@ -178,9 +187,16 @@ def validate_sg_open_to_world(securityGroups):
         for permission in permissions:
             for ipRange in permission['IpRanges']:
                 if ipRange['CidrIp'] == '0.0.0.0/0':
-                    group = {'GroupId': securityGroup['GroupId'], 'IpPermission': [permission]}
+                    group = {}
+                    group['Before'] = {'SecurityGroup': securityGroup}
+                    group['After'] = {}
+                    if kwargs['opt'] == 'update':
+                        res = update_invalid_rule_sg(ec2=ec2, groupId=securityGroup['GroupId'],
+                                                     permission=permission, bastion=kwargs['bastion'])
+                        group['After'] = {'SecurityGroup': res['ResponseBody']}
                     response.append(group)
     return response
+
 
 #################################################
 #
@@ -200,7 +216,7 @@ def validate_sg_open_to_world(securityGroups):
 #             return True
 #     return False
 
-def validate_sg_non_standard_port(securityGroups):
+def validate_sg_non_standard_port(ec2, securityGroups, **kwargs):
     # variables
     response = []
 
@@ -215,7 +231,12 @@ def validate_sg_non_standard_port(securityGroups):
                 port = permission["FromPort"]
 
             if (protocol, port) not in standard_protocol_port_pair:
-                group = {'GroupId': securityGroup['GroupId'],'IpPermission': [permission]}
+                group = {}
+                group['Before'] = {'SecurityGroup': securityGroup}
+                group['After'] = {}
+                if kwargs['opt'] == 'update':
+                    delete_invalid_rule_sg(ec2=ec2, groupId=securityGroup['GroupId'],
+                                           permission=permission)
                 response.append(group)
     return response
 
@@ -224,23 +245,7 @@ def validate_sg_non_standard_port(securityGroups):
 # # Validate the security groups which are setting the 0-65535 port range
 #
 #################################################
-# def validate_sg_portrange(permissions):
-#     # variables
-#     fromPort = None
-#     toPort = None
-#
-#     for permission in permissions:
-#         if "FromPort" in permission:
-#             fromPort = permission["FromPort"]
-#
-#         if "ToPort" in permission:
-#             toPort = permission["ToPort"]
-#
-#         if (fromPort, toPort) in port_range:
-#             return True
-#     return False
-
-def validate_sg_invalid_portrange(securityGroups):
+def validate_sg_invalid_portrange(ec2, securityGroups, **kwargs):
     # variables
     response = []
     fromPort = None
@@ -255,17 +260,24 @@ def validate_sg_invalid_portrange(securityGroups):
             if "ToPort" in permission:
                 toPort = permission["ToPort"]
 
-            if (fromPort, toPort) in port_range:
-                group = {'GroupId': securityGroup['GroupId'],'IpPermission': [permission]}
+            # the port range is consisted of multiple ports
+            if abs(toPort - fromPort) > 0:
+                group = {}
+                group['Before'] = {'SecurityGroup': securityGroup}
+                group['After'] = {}
+                if kwargs['opt'] == 'update':
+                    delete_invalid_rule_sg(ec2=ec2, groupId=securityGroup['GroupId'],
+                                           permission=permission)
                 response.append(group)
     return response
+
 
 #################################################
 #
 # # Validate the db security groups which are open-to-the-world
 #
 #################################################
-def validate_sg_db_invalid(ec2, rds):
+def validate_sg_db_invalid(ec2, rds, **kwargs):
     # variables
     response = []
 
@@ -280,8 +292,36 @@ def validate_sg_db_invalid(ec2, rds):
                         groupId
                     ]
                 )
-                response += validate_sg_open_to_world(sgDetails['SecurityGroups'])
+                for securityGroup in sgDetails['SecurityGroups']:
+                    permissions = securityGroup['IpPermissions']
+                    for permission in permissions:
+                        for ipRange in permission['IpRanges']:
+                            if ipRange['CidrIp'] == '0.0.0.0/0':
+                                group = {}
+                                group['Before'] = {'SecurityGroup': securityGroup}
+                                group['After'] = {}
+                                if kwargs['opt'] == 'update':
+                                    res = update_invalid_rule_sg(ec2=ec2, groupId=securityGroup['GroupId'],
+                                                                 permission=permission, bastion=kwargs['bastion'])
+                                    group['After'] = {'SecurityGroup': res['ResponseBody']}
+                                response.append(group)
     return response
+
+
+#################################################
+#
+# Validate the rds instance is public accessible or not
+#
+#################################################
+def validate_db_public_accessible(rds):
+    # variables
+    response = []
+
+    dbs = rds.describe_db_instances()
+    for db in dbs['DBInstances']:
+        if db['PubliclyAccessible']:
+            pass
+
 
 #################################################
 #
@@ -314,6 +354,7 @@ def list_subnets_with_igw(ec2):
                             subnets.append(association['SubnetId'])
     return subnets
 
+
 #################################################
 #
 # List the ec2 instances which are in public subnet
@@ -339,6 +380,7 @@ def list_instances_in_public_subnets(ec2, subnets):
             instances.append(instance_body)
     return instances
 
+
 #################################################
 #
 # Validate the ec2 instances which contains the remote login operations
@@ -354,6 +396,7 @@ def validate_public_subnet_remote_ops(ec2):
     response['Instances'] = instances
     return response
 
+
 #################################################
 #
 # Helper message
@@ -361,29 +404,32 @@ def validate_public_subnet_remote_ops(ec2):
 #################################################
 def help():
     print('''
-    SecurityGroupFilter.py [--region <Region>] [--delete {\"invalid-src-dest\":\"no\",\"invalid-standard-port\":\"no\",\"invalid-port-range\":\"no\",\"invalid_db_sg\":\"yes\"}]
+    SecurityGroupFilter.py [-r --region <Region>] [-u --update {\"bastion-cidr\":\"10.10.10.10/32\",\"invalid-src-dest\":\"no\",\"invalid-standard-port\":\"no\",\"invalid-port-range\":\"no\",\"invalid_db_sg\":\"yes\"}]
 
     -r --region  Specify a region code to perform cloudtrail scan, if not specified, the program will set as the 
                  default region in environment setting
                  
-    -d --delete  Specify a json body including the delete options for various conditions
+    -u --update  Specify a json body including the update options for various conditions
     ''')
+
 
 #################################################
 #
 # Delete security group rules which are invalid
 #
 #################################################
-def delete_invalid_sg(ec2, securityGroups, msg=None):
+def delete_invalid_rule_sg(ec2, groupId, permission, msg=None):
     # variables
     response = {}
 
     try:
-        for securityGroup in securityGroups:
-            ec2.revoke_security_group_ingress(
-                GroupId=securityGroup['GroupId'],
-                IpPermissions=securityGroup['IpPermission']
-            )
+        ec2.revoke_security_group_ingress(
+            GroupId=groupId,
+            IpPermissions=[permission]
+        )
+        time.sleep(1)
+        logging.debug("Security Group: [%s] has removed an invalid rule:  Rule: [%s]"
+                      % (groupId, json.dumps(permission)))
     except Exception as err:
         response['ResponseStatus'] = 'Failed'
         response['ResponseMessage'] = err
@@ -391,7 +437,62 @@ def delete_invalid_sg(ec2, securityGroups, msg=None):
 
     response['ResponseStatus'] = 'Success'
     response['ResponseMessage'] = msg
+    logging.debug(response)
     return response
+
+
+#################################################
+#
+# Add valid security group rules
+#
+#################################################
+def add_rule_to_sg(ec2, groupId, permission, bastion=None, msg=None):
+    # variables
+    response = {}
+
+    try:
+        ec2.authorize_security_group_ingress(
+            CidrIp=bastion,
+            FromPort=permission['FromPort'],
+            GroupId=groupId,
+            IpProtocol=permission['IpProtocol'],
+            ToPort=permission['ToPort']
+        )
+        time.sleep(1)
+
+        sgroups = ec2.describe_security_groups(
+            GroupIds=[
+                groupId
+            ]
+        )
+
+        logging.debug("Security Group: [%s] has added a new rule:  [CidrIp]: [%s] [FromPort]: [%s] [ToPort]: [%s]"
+                      " [IpProtocol]: [%s]"
+                      % (groupId, bastion, permission['FromPort'], permission['ToPort'],
+                         permission['IpProtocol']))
+    except Exception as err:
+        response['ResponseStatus'] = 'Failed'
+        response['ResponseMessage'] = err
+        response['ResponseBody'] = None
+        return response
+
+    response['ResponseStatus'] = 'Success'
+    response['ResponseMessage'] = msg
+    response['ResponseBody'] = sgroups
+    logging.debug(response)
+    return response
+
+
+#################################################
+#
+# Update invalid rule
+#
+#################################################
+def update_invalid_rule_sg(ec2, groupId, permission, bastion=None, msg=None):
+    delete_invalid_rule_sg(ec2=ec2, groupId=groupId, permission=permission, msg=msg)
+    response = add_rule_to_sg(ec2=ec2, groupId=groupId, permission=permission, bastion=bastion, msg=msg)
+    return response
+
 
 #################################################
 #
@@ -400,10 +501,7 @@ def delete_invalid_sg(ec2, securityGroups, msg=None):
 #################################################
 def main(argv):
     try:
-        opts, args = getopt.getopt(argv, "hr:d:",
-                                   ["help",
-                                    "region=",
-                                    "delete="])
+        opts, args = getopt.getopt(argv, "hr:u:", ["help", "region=", "update="])
     except getopt.GetoptError:
         help()
         sys.exit(2)
@@ -418,9 +516,9 @@ def main(argv):
     # filter result
     stats = {}
     # remove rules result
-    delStats = []
+    updateStats = []
     # delete options
-    delOpts = {}
+    conditions = {}
 
     for opt, arg in opts:
         if opt in ("-h", "--help"):
@@ -430,32 +528,43 @@ def main(argv):
             ec2 = boto3.client('ec2', region_name=arg)
             rds = boto3.client('rds', region_name=arg)
             sts = boto3.client('sts', region_name=arg)
-        if opt in ("-d", "--delete"):
-            delOpts = json.loads(arg)
+        if opt in ("-u", "--update"):
+            conditions = json.loads(arg)
 
     # list all security groups
     security_groups = ec2.describe_security_groups()
     stats['AccountId'] = sts.get_caller_identity()['Account']
-    stats['SourceDescOpenToTheWorld'] = validate_sg_open_to_world(security_groups['SecurityGroups'])
-    stats['NonStandardPort'] = validate_sg_non_standard_port(security_groups['SecurityGroups'])
-    stats['InvalidPortRange'] = validate_sg_invalid_portrange(security_groups['SecurityGroups'])
-    stats['DBSensitiveSecurityGroups'] = validate_sg_db_invalid(ec2=ec2, rds=rds)
-    stats['PubInstancesWithRemoteOps'] = validate_public_subnet_remote_ops(ec2)
+
+    if conditions:
+        if conditions['invalid-src-dest'] == 'yes':
+            stats['SourceDescOpenToTheWorld'] = validate_sg_open_to_world(ec2, security_groups['SecurityGroups'],
+                                                                          opt='update',
+                                                                          bastion=conditions['bastion-cidr'])
+
+        if conditions['invalid-standard-port'] == 'yes':
+            stats['NonStandardPort'] = validate_sg_non_standard_port(ec2, security_groups['SecurityGroups'],
+                                                                     opt='update'
+                                                                     )
+
+        if conditions['invalid-port-range'] == 'yes':
+            stats['InvalidPortRange'] = validate_sg_invalid_portrange(ec2, security_groups['SecurityGroups'],
+                                                                      opt='update'
+                                                                      )
+
+        if conditions['invalid_db_sg'] == 'yes':
+            stats['DBSensitiveSecurityGroups'] = validate_sg_db_invalid(ec2, rds,
+                                                                        opt='update',
+                                                                        bastion=conditions['bastion-cidr'])
+    else:
+        stats['SourceDescOpenToTheWorld'] = validate_sg_open_to_world(ec2, security_groups['SecurityGroups'])
+        stats['NonStandardPort'] = validate_sg_non_standard_port(ec2, security_groups['SecurityGroups'])
+        stats['InvalidPortRange'] = validate_sg_invalid_portrange(ec2, security_groups['SecurityGroups'])
+        stats['DBSensitiveSecurityGroups'] = validate_sg_db_invalid(ec2, rds)
+        stats['PubInstancesWithRemoteOps'] = validate_public_subnet_remote_ops(ec2)
     response['Stats'] = stats
 
-    # delete the invalid security group rules if specified delete option
-    if delOpts:
-        if delOpts['invalid-src-dest'] == 'yes':
-            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['SourceDescOpenToTheWorld'], msg='SourceDescOpenToTheWorld'))
-        if delOpts['invalid-standard-port'] == 'yes':
-            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['NonStandardPort'], msg='NonStandardPort'))
-        if delOpts['invalid-port-range'] == 'yes':
-            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['InvalidPortRange'], msg='InvalidPortRange'))
-        if delOpts['invalid_db_sg'] == 'yes':
-            delStats.append(delete_invalid_sg(ec2=ec2, securityGroups=stats['DBSensitiveSecurityGroups'], msg='DBSensitiveSecurityGroups'))
-        response['DelStats'] = delStats
-
     print(response)
+    logging.info(response)
 
 
 if __name__ == "__main__":

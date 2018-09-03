@@ -9,6 +9,7 @@ import json
 from datetime import date, datetime
 import getopt
 import sys
+import time
 
 #################################################
 #
@@ -68,17 +69,21 @@ def createInstanceProfile(iam, profileName, roleName):
         response = iam.create_instance_profile(
             InstanceProfileName=profileName
         )
-        instanceProfile = response['InstanceProfile']
+        profile = response['InstanceProfile']
 
         iam.add_role_to_instance_profile(
-            InstanceProfileName=instanceProfile['InstanceProfileName'],
+            InstanceProfileName=profile['InstanceProfileName'],
             RoleName=roleName
+        )
+
+        instanceProfile = iam.get_instance_profile(
+            InstanceProfileName=profile['InstanceProfileName']
         )
     except Exception as err:
         print(err)
         sys.exit(2)
 
-    return instanceProfile
+    return instanceProfile['InstanceProfile']
 
 
 #################################################
@@ -86,28 +91,42 @@ def createInstanceProfile(iam, profileName, roleName):
 # Get the role <SSMPermissionRoleForEC2>
 #
 #################################################
-def getSSMPermissionRoleForEC2Existed(iam):
-    # Check whether SSMPermissionRoleForEC2 and SSMPermissionRoleForEC2Profile are existed
+def getSSMPermissionRoleForEC2(iam):
+    # Check whether SSMPermissionRoleForEC2 is existed
     try:
         # Role
         roleRes = iam.get_role(
             RoleName='SSMPermissionRoleForEC2'
         )
         role = roleRes['Role']
+    except Exception as err:
+        # Create a new SSM Role
+        role = createRole(iam=iam, roleName='SSMPermissionRoleForEC2',
+                          policyArns=SSMManagedPolicyArns,
+                          desc='System Manager Permission Role for EC2')
+    return role
+
+#################################################
+#
+# Get the instance profile <SSMPermissionRoleForEC2Profile>
+#
+#################################################
+def getSSMPermissionInstanceProfileForEC2(iam, role):
+    # Check whether SSMPermissionRoleForEC2Profile is existed
+    try:
         # Instance Profile
         profileRes = iam.get_instance_profile(
             InstanceProfileName='SSMPermissionRoleForEC2Profile'
         )
         instanceProfile = profileRes['InstanceProfile']
     except Exception as err:
-        # Create a new SSM Role
-        role = createRole(iam=iam, roleName='SSMPermissionRoleForEC2',
-                          policyArns=SSMManagedPolicyArns,
-                          desc='System Manager Permission Role for EC2')
         instanceProfile = createInstanceProfile(iam=iam,
                                                 profileName='SSMPermissionRoleForEC2Profile',
                                                 roleName=role['RoleName'])
-    return role, instanceProfile
+        # Wait for the instance profile to create successfully
+        print("Waiting for instance profile to create......")
+        time.sleep(10)
+    return instanceProfile
 
 #################################################
 #
@@ -159,6 +178,9 @@ def main(argv):
     ec2 = boto3.client('ec2')
     iam = boto3.client('iam')
 
+    # variables
+    instances = []
+
     for opt, arg in opts:
         if opt in ("-h", "--help"):
             help()
@@ -168,14 +190,14 @@ def main(argv):
             iam = boto3.client('iam', region_name=arg)
 
     # Check whether the SSMPermissionRoleForEC2 is existed
-    role, instanceProfile = getSSMPermissionRoleForEC2Existed(iam=iam)
+    role = getSSMPermissionRoleForEC2(iam=iam)
+    instanceProfile = getSSMPermissionInstanceProfileForEC2(iam=iam, role=role)
 
     # Scan each EC2 instance to search the attached role
     instance_response = ec2.describe_instances()
     instance_response_str = json.dumps(instance_response, cls=DateEncoder)
     instance_response_js = json.loads(instance_response_str)
 
-    instances = []
     for reservation in instance_response_js['Reservations']:
         instances += reservation['Instances']
 
@@ -210,13 +232,21 @@ def main(argv):
             print('Without SSM Role ==> Instance: ' + instance_id)
 
             # Attach the role <SSMPermissionRoleForEC2> to the EC2 instance
-            res = ec2.associate_iam_instance_profile(
-                IamInstanceProfile={
-                    'Arn': instanceProfile['Arn'],
-                    'Name': instanceProfile['InstanceProfileName']
-                },
-                InstanceId=instance_id
-            )
+            count = 0
+            while (count < 3):
+                try:
+                    res = ec2.associate_iam_instance_profile(
+                        IamInstanceProfile={
+                            'Arn': instanceProfile['Arn'],
+                            'Name': instanceProfile['InstanceProfileName']
+                        },
+                        InstanceId=instance_id
+                    )
+                    break
+                except Exception as err:
+                    print(err)
+                    count += 1
+                    time.sleep(1)
             print("Attached Successfully ==> Instance: " + instance_id)
 
 
