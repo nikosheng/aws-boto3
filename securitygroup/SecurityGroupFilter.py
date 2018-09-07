@@ -320,7 +320,8 @@ def validate_db_public_accessible(rds):
     dbs = rds.describe_db_instances()
     for db in dbs['DBInstances']:
         if db['PubliclyAccessible']:
-            pass
+            return True
+    return False
 
 
 #################################################
